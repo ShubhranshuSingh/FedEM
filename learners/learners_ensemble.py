@@ -30,21 +30,29 @@ class LearnersEnsemble(object):
     free_gradients
 
     """
-    def __init__(self, learners, learners_weights):
+    def __init__(self, learners, learners_weights, optimizer, lr_scheduler = None):
         self.learners = learners
         self.learners_weights = learners_weights
+        self.optimizer = optimizer
+        self.lr_scheduler = lr_scheduler
 
         self.model_dim = self.learners[0].model_dim
         self.is_binary_classification = self.learners[0].is_binary_classification
         self.device = self.learners[0].device
         self.metric = self.learners[0].metric
+        self.log_offset = 1e-20
+        self.det_offset = 1e-6
+        
+        self.alpha = 2.0
+        self.beta = 0.5
 
     def optimizer_step(self):
         """
         perform one optimizer step, requires the gradients to be already computed
         """
-        for learner in self.learners:
-            learner.optimizer_step()
+        self.optimizer.step()
+        if self.lr_scheduler:
+            self.lr_scheduler.step()
 
     def compute_gradients_and_loss(self, batch, weights=None):
         """
@@ -57,10 +65,47 @@ class LearnersEnsemble(object):
             loss
 
         """
+        self.optimizer.zero_grad()
+        total_loss = 0
         losses = []
+        
+        x, y, indices = batch
+        x = x.to(self.device).type(torch.float32)
+        y = y.to(self.device)
+        
+        # One hot
+        num_classes = list(self.learners[0].model.parameters())[-1].shape[0]
+        y_true = torch.zeros(x.size(0), num_classes).to(self.device)
+        y_true.scatter_(1, y.view(-1,1), 1)
+        mask_non_y_pred = []
+        ensemble_probs = 0
+        
         for learner_id, learner in enumerate(self.learners):
-            loss = learner.compute_gradients_and_loss(batch, weights=weights)
-            losses.append(loss)
+            loss, y_pred = learner.compute_gradients_and_loss(batch, weights=weights[learner_id])
+  
+            total_loss += loss*self.learners_weights[learner_id] # all models in ensemble have different weight
+            
+            y_pred = F.softmax(y_pred, dim=-1)
+            ensemble_probs += y_pred*self.learners_weights[learner_id] # all models in ensemble have different weight
+            
+            bool_R_y_true = torch.eq(torch.ones_like(y_true) - y_true, torch.ones_like(y_true))
+            mask_non_y_pred.append(torch.masked_select(y_pred*self.learners_weights[learner_id], bool_R_y_true).reshape(-1, num_classes-1))
+            
+            losses.append(loss.detach())
+            
+        ensemble_entropy = torch.sum(-torch.mul(ensemble_probs, torch.log(ensemble_probs + self.log_offset)), dim=-1).mean()
+
+        mask_non_y_pred = torch.stack(mask_non_y_pred, dim=1)
+        assert mask_non_y_pred.shape == (x.size(0), len(self.learners), num_classes-1)
+        
+        mask_non_y_pred = mask_non_y_pred / torch.norm(mask_non_y_pred, p=2, dim=-1, keepdim=True) 
+        matrix = torch.matmul(mask_non_y_pred, mask_non_y_pred.permute(0, 2, 1))
+        log_det = torch.logdet(matrix+self.det_offset*torch.eye(len(self.learners), device=matrix.device).unsqueeze(0)).mean() 
+        
+        total_loss *= len(self.learners)
+        total_loss -= self.alpha * ensemble_entropy + self.beta * log_det
+        
+        total_loss.backward()
 
         return losses
 
@@ -77,17 +122,16 @@ class LearnersEnsemble(object):
 
         """
         client_updates = torch.zeros(len(self.learners), self.model_dim)
-
+        
         for learner_id, learner in enumerate(self.learners):
-            old_params = learner.get_param_tensor()
-            if weights is not None:
-                learner.fit_batch(batch=batch, weights=weights[learner_id])
-            else:
-                learner.fit_batch(batch=batch, weights=None)
-
-            params = learner.get_param_tensor()
-
-            client_updates[learner_id] = (params - old_params)
+            client_updates[learner_id] = learner.get_param_tensor()
+            
+            
+        self.compute_gradients_and_loss(batch, weights)
+        self.optimizer_step()
+        
+        for learner_id, learner in enumerate(self.learners):
+            client_updates[learner_id] = learner.get_param_tensor() - client_updates[learner_id].to(self.device)
 
         return client_updates.cpu().numpy()
 
@@ -107,17 +151,21 @@ class LearnersEnsemble(object):
             and the updated parameters for each learner in the ensemble.
 
         """
+        
         client_updates = torch.zeros(len(self.learners), self.model_dim)
-
+        
         for learner_id, learner in enumerate(self.learners):
-            old_params = learner.get_param_tensor()
-            if weights is not None:
-                learner.fit_epochs(iterator, n_epochs, weights=weights[learner_id])
-            else:
-                learner.fit_epochs(iterator, n_epochs, weights=None)
-            params = learner.get_param_tensor()
-
-            client_updates[learner_id] = (params - old_params)
+            client_updates[learner_id] = learner.get_param_tensor()
+            
+        for i in range(n_epochs):
+            for batch in iterator:
+                self.compute_gradients_and_loss(batch,weights)
+                self.optimizer.step()
+            if self.lr_scheduler:
+                self.lr_scheduler.step()
+                
+        for learner_id, learner in enumerate(self.learners):
+            client_updates[learner_id] = learner.get_param_tensor() - client_updates[learner_id].to(self.device)
 
         return client_updates.cpu().numpy()
 

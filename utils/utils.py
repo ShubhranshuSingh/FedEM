@@ -31,11 +31,6 @@ def get_data_dir(experiment_name):
 def get_learner(
         name,
         device,
-        optimizer_name,
-        scheduler_name,
-        initial_lr,
-        mu,
-        n_rounds,
         seed,
         input_dim=None,
         output_dim=None
@@ -46,13 +41,8 @@ def get_learner(
     :param name: name of the experiment to be used; possible are
                  {`synthetic`, `cifar10`, `emnist`, `shakespeare`}
     :param device: used device; possible `cpu` and `cuda`
-    :param optimizer_name: passed as argument to utils.optim.get_optimizer
-    :param scheduler_name: passed as argument to utils.optim.get_lr_scheduler
-    :param initial_lr: initial value of the learning rate
-    :param mu: proximal term weight, only used when `optimizer_name=="prox_sgd"`
     :param input_dim: input dimension, only used for synthetic dataset
     :param output_dim: output_dimension; only used for synthetic dataset
-    :param n_rounds: number of training rounds, only used if `scheduler_name == multi_step`, default is None;
     :param seed:
     :return: Learner
     """
@@ -117,28 +107,12 @@ def get_learner(
     else:
         raise NotImplementedError
 
-    optimizer =\
-        get_optimizer(
-            optimizer_name=optimizer_name,
-            model=model,
-            lr_initial=initial_lr,
-            mu=mu
-        )
-    lr_scheduler =\
-        get_lr_scheduler(
-            optimizer=optimizer,
-            scheduler_name=scheduler_name,
-            n_rounds=n_rounds
-        )
-
     if name == "shakespeare":
         return LanguageModelingLearner(
             model=model,
             criterion=criterion,
             metric=metric,
             device=device,
-            optimizer=optimizer,
-            lr_scheduler=lr_scheduler,
             is_binary_classification=is_binary_classification
         )
     else:
@@ -147,8 +121,6 @@ def get_learner(
             criterion=criterion,
             metric=metric,
             device=device,
-            optimizer=optimizer,
-            lr_scheduler=lr_scheduler,
             is_binary_classification=is_binary_classification
         )
 
@@ -183,26 +155,37 @@ def get_learners_ensemble(
     :param seed:
     :return: LearnersEnsemble
     """
+    
     learners = [
         get_learner(
             name=name,
             device=device,
-            optimizer_name=optimizer_name,
-            scheduler_name=scheduler_name,
-            initial_lr=initial_lr,
             input_dim=input_dim,
             output_dim=output_dim,
-            n_rounds=n_rounds,
             seed=seed + learner_id,
-            mu=mu
         ) for learner_id in range(n_learners)
     ]
+    
+    optimizer =\
+        get_optimizer_ensemble(
+            optimizer_name=optimizer_name,
+            models=[learners[i].model for i in range(len(learners))],
+            lr_initial=initial_lr,
+            mu=mu
+        )
+    
+    lr_scheduler =\
+        get_lr_scheduler(
+            optimizer=optimizer,
+            scheduler_name=scheduler_name,
+            n_rounds=n_rounds
+        )
 
     learners_weights = torch.ones(n_learners) / n_learners
     if name == "shakespeare":
         return LanguageModelingLearnersEnsemble(learners=learners, learners_weights=learners_weights)
     else:
-        return LearnersEnsemble(learners=learners, learners_weights=learners_weights)
+        return LearnersEnsemble(learners=learners, learners_weights=learners_weights, optimizer=optimizer, lr_scheduler=lr_scheduler)
 
 
 def get_loaders(type_, root_path, batch_size, is_validation):

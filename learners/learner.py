@@ -15,18 +15,12 @@ class Learner:
 
     device (str or torch.device):
 
-    optimizer (torch.optim.Optimizer):
-
-    lr_scheduler (torch.optim.lr_scheduler):
-
     is_binary_classification (bool): whether to cast labels to float or not, if `BCELoss`
     is used as criterion this should be set to True
 
     Methods
     ------
     compute_gradients_and_loss:
-
-    optimizer_step: perform one optimizer step, requires the gradients to be already computed.
 
     fit_batch: perform an optimizer step over one batch
 
@@ -52,8 +46,6 @@ class Learner:
             criterion,
             metric,
             device,
-            optimizer,
-            lr_scheduler=None,
             is_binary_classification=False
     ):
 
@@ -61,19 +53,12 @@ class Learner:
         self.criterion = criterion.to(device)
         self.metric = metric
         self.device = device
-        self.optimizer = optimizer
-        self.lr_scheduler = lr_scheduler
         self.is_binary_classification = is_binary_classification
 
         self.model_dim = int(self.get_param_tensor().shape[0])
-
-    def optimizer_step(self):
-        """
-         perform one optimizer step, requires the gradients to be already computed.
-        """
-        self.optimizer.step()
-        if self.lr_scheduler:
-            self.lr_scheduler.step()
+        
+#         self.optimizer ----> <todo>
+#         lr_scheduler   ----> <todo 2>
 
     def compute_gradients_and_loss(self, batch, weights=None):
         """
@@ -87,6 +72,9 @@ class Learner:
 
         """
         self.model.train()
+        
+#         from IPython import embed
+#         embed()
 
         x, y, indices = batch
         x = x.to(self.device).type(torch.float32)
@@ -95,20 +83,16 @@ class Learner:
         if self.is_binary_classification:
             y = y.type(torch.float32).unsqueeze(1)
 
-        self.optimizer.zero_grad()
-
         y_pred = self.model(x)
         loss_vec = self.criterion(y_pred, y)
 
         if weights is not None:
             weights = weights.to(self.device)
-            loss = (loss_vec.T @ weights[indices]) / loss_vec.size(0)
+            loss = torch.dot(loss_vec, weights[indices]) / loss_vec.size(0)
         else:
             loss = loss_vec.mean()
 
-        loss.backward()
-
-        return loss.detach()
+        return loss, y_pred
 
     def fit_batch(self, batch, weights=None):
         """
@@ -131,8 +115,6 @@ class Learner:
         if self.is_binary_classification:
             y = y.type(torch.float32).unsqueeze(1)
 
-        self.optimizer.zero_grad()
-
         y_pred = self.model(x)
         loss_vec = self.criterion(y_pred, y)
         metric = self.metric(y_pred, y) / len(y)
@@ -144,10 +126,6 @@ class Learner:
             loss = loss_vec.mean()
 
         loss.backward()
-
-        self.optimizer.step()
-        if self.lr_scheduler:
-            self.lr_scheduler.step()
 
         return loss.detach(), metric.detach()
 
@@ -179,8 +157,6 @@ class Learner:
             if self.is_binary_classification:
                 y = y.type(torch.float32).unsqueeze(1)
 
-            self.optimizer.zero_grad()
-
             y_pred = self.model(x)
 
             loss_vec = self.criterion(y_pred, y)
@@ -190,8 +166,6 @@ class Learner:
             else:
                 loss = loss_vec.mean()
             loss.backward()
-
-            self.optimizer.step()
 
             global_loss += loss.detach() * loss_vec.size(0)
             global_metric += self.metric(y_pred, y).detach()
@@ -275,9 +249,6 @@ class Learner:
         for step in range(n_epochs):
             self.fit_epoch(iterator, weights)
 
-            if self.lr_scheduler is not None:
-                self.lr_scheduler.step()
-
     def get_param_tensor(self):
         """
         get `model` parameters as a unique flattened tensor
@@ -312,15 +283,14 @@ class Learner:
         free the memory allocated by the model weights
 
         """
-        del self.optimizer
         del self.model
 
-    def free_gradients(self):
-        """
-        free memory allocated by gradients
+#     def free_gradients(self):
+#         """
+#         free memory allocated by gradients
 
-        """
-        self.optimizer.zero_grad(set_to_none=True)
+#         """
+#         <todo>.zero_grad(set_to_none=True)
 
 
 class LanguageModelingLearner(Learner):
@@ -340,7 +310,7 @@ class LanguageModelingLearner(Learner):
 
             chunk_len = y.size(1)
 
-            self.optimizer.zero_grad()
+#             <todo>.zero_grad()
 
             y_pred = self.model(x)
             loss_vec = self.criterion(y_pred, y)
@@ -353,7 +323,7 @@ class LanguageModelingLearner(Learner):
 
             loss.backward()
 
-            self.optimizer.step()
+#             <todo>.step()
 
             global_loss += loss.detach() * loss_vec.size(0) / chunk_len
             global_metric += self.metric(y_pred, y).detach() / chunk_len
@@ -371,7 +341,7 @@ class LanguageModelingLearner(Learner):
         n_samples = y.size(0)
         chunk_len = y.size(1)
 
-        self.optimizer.zero_grad()
+#         <todo>.zero_grad()
 
         y_pred = self.model(x)
         loss_vec = self.criterion(y_pred, y)
@@ -384,7 +354,7 @@ class LanguageModelingLearner(Learner):
 
         loss.backward()
 
-        self.optimizer.step()
+#         <todo>.step()
 
         global_loss = loss.detach() * loss_vec.size(0) / chunk_len
         global_metric = self.metric(y_pred, y).detach() / chunk_len

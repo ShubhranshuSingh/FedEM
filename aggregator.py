@@ -470,11 +470,6 @@ class CentralizedAggregator(Aggregator):
             for learner_id, learner in enumerate(client.learners_ensemble):
                 copy_model(learner.model, self.global_learners_ensemble[learner_id].model)
 
-                if callable(getattr(learner.optimizer, "set_initial_params", None)):
-                    learner.optimizer.set_initial_params(
-                        self.global_learners_ensemble[learner_id].model.parameters()
-                    )
-
 
 class PersonalizedAggregator(CentralizedAggregator):
     r"""

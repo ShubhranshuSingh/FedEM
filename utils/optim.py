@@ -171,6 +171,52 @@ def get_optimizer(optimizer_name, model, lr_initial, mu=0.):
         )
     else:
         raise NotImplementedError("Other optimizer are not implemented")
+        
+def get_optimizer_ensemble(optimizer_name, models, lr_initial, mu=0.):
+    """
+    Gets torch.optim.Optimizer given an optimizer name, a model and learning rate
+
+    :param optimizer_name: possible are adam and sgd
+    :type optimizer_name: str
+    :param model: model to be optimized
+    :type optimizer_name: nn.Module
+    :param lr_initial: initial learning used to build the optimizer
+    :type lr_initial: float
+    :param mu: proximal term weight; default=0.
+    :type mu: float
+    :return: torch.optim.Optimizer
+
+    """
+    param_list = []
+    for m in models:
+        for param in m.parameters():
+            if param.requires_grad:
+                param_list.append(param)
+    if optimizer_name == "adam":
+        return optim.Adam(
+            param_list,
+            lr=lr_initial,
+            weight_decay=5e-4
+        )
+
+    elif optimizer_name == "sgd":
+        return optim.SGD(
+            param_list,
+            lr=lr_initial,
+            momentum=0.9,
+            weight_decay=5e-4
+        )
+
+    elif optimizer_name == "prox_sgd":
+        return ProxSGD(
+            param_list,
+            mu=mu,
+            lr=lr_initial,
+            momentum=0.,
+            weight_decay=5e-4
+        )
+    else:
+        raise NotImplementedError("Other optimizer are not implemented")
 
 
 def get_lr_scheduler(optimizer, scheduler_name, n_rounds=None):
